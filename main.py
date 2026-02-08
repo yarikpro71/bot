@@ -72,10 +72,8 @@ def start_command(message):
 
 def show_main_menu(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    # Кнопки студента
     markup.add("📅 Расписание", "🏠 Домашние работы", "🚩 Контрольные точки", "🔔 Настройки")
 
-    # Кнопки админа
     if user_id == ADMIN_ID:
         markup.add("✏️ Ред. ДЗ", "✏️ Ред. КТ")
         markup.add("✏️ Ред. Расписание", "📢 Сделать рассылку")
@@ -109,9 +107,12 @@ def start_edit_schedule(message):
 
     buttons = [types.InlineKeyboardButton(text, callback_data=f"edit_day_{code}") for text, code in days]
     markup.add(*buttons)
+    
+    # Кнопки управления
+    markup.add(types.InlineKeyboardButton("🗑 Удалить всё расписание", callback_data="edit_clear_all"))
     markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="edit_cancel"))
 
-    bot.send_message(ADMIN_ID, "🗓 <b>Выбери день недели для редактирования:</b>", reply_markup=markup, parse_mode='HTML')
+    bot.send_message(ADMIN_ID, "🗓 <b>Редактор расписания:</b>", reply_markup=markup, parse_mode='HTML')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('edit_'))
 def callback_edit_schedule(call):
@@ -120,10 +121,31 @@ def callback_edit_schedule(call):
 
     if action == "cancel":
         bot.delete_message(ADMIN_ID, call.message.message_id)
-        bot.send_message(ADMIN_ID, "Редактирование отменено.")
+        bot.send_message(ADMIN_ID, "Редактирование завершено.")
         edit_cache.pop(ADMIN_ID, None)
         return
 
+    # --- ЛОГИКА УДАЛЕНИЯ ВСЕГО ---
+    if action == "clear": # edit_clear_all (split даст "clear")
+        if len(call.data.split('_')) > 2 and call.data.split('_')[2] == "all":
+            # Спрашиваем подтверждение
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔥 Да, удалить ВСЁ", callback_data="edit_confirm_delete"))
+            markup.add(types.InlineKeyboardButton("❌ Нет, назад", callback_data="edit_cancel"))
+            bot.edit_message_text("⚠️ <b>Вы уверены?</b>\nЭто удалит расписание на ВСЕ дни недели.\nЭто действие нельзя отменить.", 
+                                  ADMIN_ID, call.message.message_id, reply_markup=markup, parse_mode='HTML')
+            return
+
+    if action == "confirm": # edit_confirm_delete
+        if len(call.data.split('_')) > 2 and call.data.split('_')[2] == "delete":
+            # Очищаем словарь
+            for day in content_db["schedule"]:
+                content_db["schedule"][day] = []
+            save_json(FILES["content"], content_db)
+            bot.edit_message_text("🗑 <b>Расписание полностью очищено.</b>", ADMIN_ID, call.message.message_id, parse_mode='HTML')
+            return
+
+    # --- ЛОГИКА ВЫБОРА ДНЯ ---
     if action == "day":
         day_code = call.data.split('_')[2]
         edit_cache[ADMIN_ID] = {"day": day_code, "lessons": []}
@@ -219,7 +241,7 @@ def finish_lesson(lesson_num):
         edit_cache.pop(ADMIN_ID, None)
 
 # ==========================================
-# 🛠 АДМИН-ПАНЕЛЬ (ДЗ и КТ) с Отменой
+# 🛠 АДМИН-ПАНЕЛЬ (ДЗ и КТ)
 # ==========================================
 
 @bot.message_handler(func=lambda m: m.text == "✏️ Ред. ДЗ" and m.chat.id == ADMIN_ID)
@@ -281,7 +303,7 @@ def perform_broadcast(message):
     bot.send_message(ADMIN_ID, f"✅ Рассылка завершена. Доставлено: {count}")
 
 # ==========================================
-# ⚙️ НАСТРОЙКИ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ⚙️ НАСТРОЙКИ
 # ==========================================
 
 def send_settings_menu(user_id):
@@ -310,12 +332,22 @@ def callback_settings_actions(c):
         bot.edit_message_reply_markup(chat_id=uid, message_id=c.message.message_id, reply_markup=markup)
     except: pass
 
-# --- НОВЫЙ ДИЗАЙН РАСПИСАНИЯ ---
+# --- ДИЗАЙН РАСПИСАНИЯ ---
 def format_schedule():
     text = "<b>🎓 РАСПИСАНИЕ:</b>\n"
     ru_days = {"Monday": "Понедельник", "Tuesday": "Вторник", "Wednesday": "Среда", "Thursday": "Четверг", "Friday": "Пятница", "Saturday": "Суббота", "Sunday": "Воскресенье"}
 
     sched = content_db.get("schedule", {})
+    
+    # Проверка на пустое расписание
+    is_empty = True
+    for day in sched:
+        if sched[day]:
+            is_empty = False
+            break
+    
+    if is_empty:
+        return "<b>🎓 РАСПИСАНИЕ:</b>\n\nПока пусто. Отдыхаем! 😴"
 
     for day, lessons in sched.items():
         if not lessons: continue
