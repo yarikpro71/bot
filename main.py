@@ -222,4 +222,123 @@ def finish_lesson(lesson_num):
 # ==========================================
 
 @bot.message_handler(func=lambda m: m.text == "✏️ Ред. ДЗ" and m.chat.id == ADMIN_ID)
-def edit_hw(
+def edit_hw(message):
+    msg = bot.send_message(ADMIN_ID, "✍️ Введи новый текст для <b>ДЗ</b>:", parse_mode='HTML')
+    bot.register_next_step_handler(msg, save_hw)
+
+def save_hw(message):
+    content_db["hw"] = message.text
+    save_json(FILES["content"], content_db)
+    bot.send_message(ADMIN_ID, "✅ ДЗ обновлено.")
+
+@bot.message_handler(func=lambda m: m.text == "✏️ Ред. КТ" and m.chat.id == ADMIN_ID)
+def edit_ct(message):
+    msg = bot.send_message(ADMIN_ID, "✍️ Введи новый текст для <b>КТ</b>:", parse_mode='HTML')
+    bot.register_next_step_handler(msg, save_ct)
+
+def save_ct(message):
+    content_db["ct"] = message.text
+    save_json(FILES["content"], content_db)
+    bot.send_message(ADMIN_ID, "✅ КТ обновлено.")
+
+# ==========================================
+# 📨 РАССЫЛКА И УВЕДОМЛЕНИЯ
+# ==========================================
+
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
+def admin_broadcast(message):
+    if message.chat.id != ADMIN_ID: return
+    if message.text in USER_BUTTONS or message.text in ADMIN_BUTTONS: return
+
+    bot.reply_to(message, f"📢 Рассылаю...")
+    count = 0
+    caption_full = f"📢 <b>ОБЪЯВЛЕНИЕ:</b>\n\n{message.caption if message.caption else ''}"
+    
+    for user_id in list(users_db.keys()):
+        if user_id == ADMIN_ID: continue
+        try:
+            if message.content_type == 'text':
+                bot.send_message(user_id, f"📢 <b>ОБЪЯВЛЕНИЕ:</b>\n\n{message.text}", parse_mode='HTML')
+            elif message.content_type == 'photo':
+                bot.send_photo(user_id, message.photo[-1].file_id, caption=caption_full, parse_mode='HTML')
+            elif message.content_type == 'document':
+                bot.send_document(user_id, message.document.file_id, caption=caption_full, parse_mode='HTML')
+            count += 1
+        except: pass
+    bot.send_message(ADMIN_ID, f"✅ Доставлено: {count}")
+
+# --- ИСПРАВЛЕННЫЕ НАСТРОЙКИ (без дублирования) ---
+
+def send_settings_menu(user_id):
+    s = users_db.get(user_id, {"notify": True, "time": 10})
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(f"Статус: {'✅' if s['notify'] else '❌'}", callback_data="toggle"))
+    markup.add(types.InlineKeyboardButton(f"Время: {s['time']} мин ⏳", callback_data="time"))
+    bot.send_message(user_id, "⚙️ Настройки:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data in ["toggle", "time"])
+def callback_settings_actions(c):
+    uid = c.message.chat.id
+    if uid not in users_db: users_db[uid] = {"notify": True, "time": 10}
+    
+    # Меняем значения в базе
+    if c.data == "toggle": users_db[uid]['notify'] = not users_db[uid]['notify']
+    elif c.data == "time": users_db[uid]['time'] = 10 if users_db[uid]['time'] == 5 else (60 if users_db[uid]['time'] == 10 else 5)
+    
+    save_json(FILES["users"], users_db)
+
+    # Генерируем клавиатуру заново с новыми значениями
+    s = users_db[uid]
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(f"Статус: {'✅' if s['notify'] else '❌'}", callback_data="toggle"))
+    markup.add(types.InlineKeyboardButton(f"Время: {s['time']} мин ⏳", callback_data="time"))
+    
+    # ВОТ ЗДЕСЬ ИСПРАВЛЕНИЕ: МЫ РЕДАКТИРУЕМ, А НЕ ОТПРАВЛЯЕМ НОВОЕ
+    try:
+        bot.edit_message_reply_markup(chat_id=uid, message_id=c.message.message_id, reply_markup=markup)
+    except:
+        pass # Если пользователь нажал кнопку, но ничего не изменилось
+
+def format_schedule():
+    text = "<b>🎓 РАСПИСАНИЕ:</b>\n\n"
+    ru_days = {"Monday": "Понедельник", "Tuesday": "Вторник", "Wednesday": "Среда", "Thursday": "Четверг", "Friday": "Пятница", "Saturday": "Суббота", "Sunday": "Воскресенье"}
+    
+    sched = content_db.get("schedule", {})
+    
+    for day, lessons in sched.items():
+        if not lessons: continue
+        text += f"🗓 <b>{ru_days.get(day, day)}</b>\n"
+        for l in lessons:
+            ct = "🔴 КТ!" if l.get('ct') else ""
+            note = f"\n📝 <i>{l['note']}</i>" if l.get('note') else ""
+            link_text = f"\n🔗 <a href='{l['link']}'>Ссылка</a>" if l.get('link') else ""
+            text += f"🕒 {l['time']} — {l['name']} {ct}{link_text}{note}\n\n"
+        text += "------------------\n"
+    return text
+
+def notification_loop():
+    while True:
+        try:
+            now = datetime.now()
+            day = now.strftime("%A")
+            sched = content_db.get("schedule", {})
+            if day in sched:
+                for l in sched[day]:
+                    h, m = map(int, l['time'].split(":"))
+                    start = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                    for uid, s in users_db.items():
+                        if s['notify']:
+                            ntilde = start - timedelta(minutes=s['time'])
+                            if now.hour == ntilde.hour and now.minute == ntilde.minute:
+                                note = f"\n\n📝 {l['note']}" if l.get('note') else ""
+                                link = f"\n🔗 <a href='{l['link']}'>Подключиться</a>" if l.get('link') else ""
+                                msg = f"⏰ <b>Пара через {s['time']} мин!</b>\n{l['name']}{link}{note}"
+                                bot.send_message(uid, msg, parse_mode='HTML')
+            time.sleep(60)
+        except: time.sleep(60)
+
+if __name__ == "__main__":
+    t = threading.Thread(target=notification_loop, daemon=True)
+    t.start()
+    print("Бот запущен!")
+    bot.infinity_polling()
