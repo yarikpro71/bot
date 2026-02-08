@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 # ⚙️ НАСТРОЙКИ
 # ==========================================
 
+# ТВОЙ НОВЫЙ ТОКЕН
 TOKEN = '8502946152:AAFjl9jbD-iqYbx3aCp3BcXBTWNT0O4DQIw'
 ADMIN_ID = 1151803777  # Твой ID
 
@@ -21,7 +22,6 @@ FILES = {
 }
 
 # Временное хранилище для процесса редактирования
-# admin_state[ADMIN_ID] = { "day": "Monday", "count": 2, "current": 0, "lessons": [] }
 edit_cache = {}
 
 DEFAULT_CONTENT = {
@@ -97,12 +97,11 @@ def user_menu(message):
         send_settings_menu(user_id)
 
 # ==========================================
-# 🛠 РЕДАКТИРОВАНИЕ РАСПИСАНИЯ (НОВАЯ ЛОГИКА)
+# 🛠 РЕДАКТИРОВАНИЕ РАСПИСАНИЯ
 # ==========================================
 
 @bot.message_handler(func=lambda m: m.text == "✏️ Ред. Расписание" and m.chat.id == ADMIN_ID)
 def start_edit_schedule(message):
-    # Шаг 1: Выбор дня
     markup = types.InlineKeyboardMarkup(row_width=2)
     days = [("Понедельник", "Monday"), ("Вторник", "Tuesday"), ("Среда", "Wednesday"),
             ("Четверг", "Thursday"), ("Пятница", "Friday"), ("Суббота", "Saturday"), ("Воскресенье", "Sunday")]
@@ -125,8 +124,102 @@ def callback_edit_schedule(call):
         return
 
     if action == "day":
-        # Шаг 2: Выбор количества пар
         day_code = call.data.split('_')[2]
-        edit_cache[ADMIN_ID] = {"day": day_code, "lessons": []} # Инициализируем кэш
+        edit_cache[ADMIN_ID] = {"day": day_code, "lessons": []}
         
-        markup = types.Inline
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        btns = [types.InlineKeyboardButton(str(i), callback_data=f"edit_count_{i}") for i in range(6)]
+        markup.add(*btns)
+        
+        ru_day = {"Monday":"Понедельник","Tuesday":"Вторник","Wednesday":"Среда","Thursday":"Четверг","Friday":"Пятница","Saturday":"Суббота","Sunday":"Воскресенье"}[day_code]
+        
+        bot.edit_message_text(f"Выбран день: <b>{ru_day}</b>.\nСколько будет пар?", 
+                              ADMIN_ID, call.message.message_id, reply_markup=markup, parse_mode='HTML')
+
+    elif action == "count":
+        count = int(call.data.split('_')[2])
+        edit_cache[ADMIN_ID]["total"] = count
+        
+        if count == 0:
+            day = edit_cache[ADMIN_ID]["day"]
+            content_db["schedule"][day] = []
+            save_json(FILES["content"], content_db)
+            bot.edit_message_text(f"✅ Расписание на этот день очищено (0 пар).", ADMIN_ID, call.message.message_id)
+            edit_cache.pop(ADMIN_ID, None)
+        else:
+            ask_lesson_time(ADMIN_ID, 1)
+
+def ask_lesson_time(user_id, lesson_num):
+    msg = bot.send_message(user_id, f"1️⃣ <b>Пара №{lesson_num}</b>\n\nВведите время начала (например: <code>09:00</code>):", parse_mode='HTML')
+    bot.register_next_step_handler(msg, process_time, lesson_num)
+
+def process_time(message, lesson_num):
+    if message.text.lower() == "отмена": return bot.send_message(ADMIN_ID, "❌ Отменено.")
+    current_lesson = {"time": message.text}
+    edit_cache[ADMIN_ID]["temp_lesson"] = current_lesson
+    msg = bot.send_message(ADMIN_ID, f"2️⃣ Введите <b>название предмета</b>:")
+    bot.register_next_step_handler(msg, process_name, lesson_num)
+
+def process_name(message, lesson_num):
+    edit_cache[ADMIN_ID]["temp_lesson"]["name"] = message.text
+    msg = bot.send_message(ADMIN_ID, f"3️⃣ Вставьте <b>ссылку</b> (или напишите '-', если нет):")
+    bot.register_next_step_handler(msg, process_link, lesson_num)
+
+def process_link(message, lesson_num):
+    link = message.text
+    if link == "-": link = ""
+    edit_cache[ADMIN_ID]["temp_lesson"]["link"] = link
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Да, есть КТ", callback_data=f"set_ct_yes_{lesson_num}"),
+               types.InlineKeyboardButton("Нет", callback_data=f"set_ct_no_{lesson_num}"))
+    bot.send_message(ADMIN_ID, "4️⃣ Будет ли <b>Контрольная Точка (КТ)</b>?", reply_markup=markup, parse_mode='HTML')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_ct_'))
+def callback_set_ct(call):
+    if call.message.chat.id != ADMIN_ID: return
+    data = call.data.split('_')
+    is_ct = (data[2] == "yes")
+    lesson_num = int(data[3])
+    edit_cache[ADMIN_ID]["temp_lesson"]["ct"] = is_ct
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✍️ Написать сообщение", callback_data=f"set_note_yes_{lesson_num}"),
+               types.InlineKeyboardButton("Без сообщения", callback_data=f"set_note_no_{lesson_num}"))
+    bot.edit_message_text("5️⃣ Хотите добавить <b>комментарий/заметку</b> к этой паре?", 
+                          ADMIN_ID, call.message.message_id, reply_markup=markup, parse_mode='HTML')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_note_'))
+def callback_set_note(call):
+    if call.message.chat.id != ADMIN_ID: return
+    choice = call.data.split('_')[2]
+    lesson_num = int(call.data.split('_')[3])
+    if choice == "yes":
+        msg = bot.send_message(ADMIN_ID, "✍️ Введите текст сообщения для этой пары:")
+        bot.register_next_step_handler(msg, process_note_text, lesson_num)
+    else:
+        edit_cache[ADMIN_ID]["temp_lesson"]["note"] = ""
+        finish_lesson(lesson_num)
+
+def process_note_text(message, lesson_num):
+    edit_cache[ADMIN_ID]["temp_lesson"]["note"] = message.text
+    finish_lesson(lesson_num)
+
+def finish_lesson(lesson_num):
+    lesson_data = edit_cache[ADMIN_ID]["temp_lesson"]
+    edit_cache[ADMIN_ID]["lessons"].append(lesson_data)
+    total = edit_cache[ADMIN_ID]["total"]
+    if lesson_num < total:
+        bot.send_message(ADMIN_ID, "✅ Пара сохранена. Следующая...")
+        ask_lesson_time(ADMIN_ID, lesson_num + 1)
+    else:
+        day = edit_cache[ADMIN_ID]["day"]
+        content_db["schedule"][day] = edit_cache[ADMIN_ID]["lessons"]
+        save_json(FILES["content"], content_db)
+        bot.send_message(ADMIN_ID, f"🎉 <b>Готово!</b> Расписание на этот день обновлено.", parse_mode='HTML')
+        edit_cache.pop(ADMIN_ID, None)
+
+# ==========================================
+# 🛠 АДМИН-ПАНЕЛЬ (ДЗ и КТ)
+# ==========================================
+
+@bot.message_handler(func=lambda m: m.text == "✏️ Ред. ДЗ" and m.chat.id == ADMIN_ID)
+def edit_hw(
