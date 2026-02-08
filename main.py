@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 # ⚙️ СИСТЕМНЫЕ НАСТРОЙКИ
 # ==========================================
 
-TOKEN = '8255305162:AAFpTnNV_tcKwmX4m9a3Um-9m8HWGbq5arE'
+TOKEN = '8502946152:AAFjl9jbD-iqYbx3aCp3BcXBTWNT0O4DQIw'
 ADMIN_ID = 1151803777  # Твой ID
 
 bot = telebot.TeleBot(TOKEN)
