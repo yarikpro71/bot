@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 # ⚙️ НАСТРОЙКИ
 # ==========================================
 
-# ТВОЙ НОВЫЙ ТОКЕН
 TOKEN = '8502946152:AAFjl9jbD-iqYbx3aCp3BcXBTWNT0O4DQIw'
 ADMIN_ID = 1151803777  # Твой ID
 
@@ -61,7 +60,7 @@ content_db = load_json(FILES["content"], DEFAULT_CONTENT)
 # ==========================================
 
 USER_BUTTONS = ["📅 Расписание", "🚩 Контрольные точки", "🏠 Домашние работы", "🔔 Настройки"]
-ADMIN_BUTTONS = ["✏️ Ред. ДЗ", "✏️ Ред. КТ", "✏️ Ред. Расписание"]
+ADMIN_BUTTONS = ["✏️ Ред. ДЗ", "✏️ Ред. КТ", "✏️ Ред. Расписание", "📢 Сделать рассылку"]
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -73,11 +72,13 @@ def start_command(message):
 
 def show_main_menu(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    # Кнопки студента
     markup.add("📅 Расписание", "🏠 Домашние работы", "🚩 Контрольные точки", "🔔 Настройки")
     
+    # Кнопки админа
     if user_id == ADMIN_ID:
         markup.add("✏️ Ред. ДЗ", "✏️ Ред. КТ")
-        markup.add("✏️ Ред. Расписание")
+        markup.add("✏️ Ред. Расписание", "📢 Сделать рассылку")
 
     bot.send_message(user_id, "Главное меню:", reply_markup=markup)
 
@@ -242,15 +243,22 @@ def save_ct(message):
     bot.send_message(ADMIN_ID, "✅ КТ обновлено.")
 
 # ==========================================
-# 📨 РАССЫЛКА И УВЕДОМЛЕНИЯ
+# 📢 НОВАЯ ЛОГИКА РАССЫЛКИ
 # ==========================================
 
-@bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
-def admin_broadcast(message):
-    if message.chat.id != ADMIN_ID: return
-    if message.text in USER_BUTTONS or message.text in ADMIN_BUTTONS: return
+# 1. Нажимаем кнопку "Сделать рассылку"
+@bot.message_handler(func=lambda m: m.text == "📢 Сделать рассылку" and m.chat.id == ADMIN_ID)
+def start_broadcast(message):
+    msg = bot.send_message(ADMIN_ID, "📝 <b>Отправь сообщение</b> (текст, фото, видео или файл), которое нужно разослать всем студентам.\n\nНапиши <code>Отмена</code>, если передумал.", parse_mode='HTML')
+    bot.register_next_step_handler(msg, perform_broadcast)
 
-    bot.reply_to(message, f"📢 Рассылаю...")
+# 2. Бот ждет сообщение и рассылает его
+def perform_broadcast(message):
+    if message.content_type == 'text' and message.text.lower() == "отмена":
+        return bot.send_message(ADMIN_ID, "❌ Рассылка отменена.")
+
+    bot.reply_to(message, f"📢 Начинаю рассылку...")
+    
     count = 0
     caption_full = f"📢 <b>ОБЪЯВЛЕНИЕ:</b>\n\n{message.caption if message.caption else ''}"
     
@@ -261,13 +269,18 @@ def admin_broadcast(message):
                 bot.send_message(user_id, f"📢 <b>ОБЪЯВЛЕНИЕ:</b>\n\n{message.text}", parse_mode='HTML')
             elif message.content_type == 'photo':
                 bot.send_photo(user_id, message.photo[-1].file_id, caption=caption_full, parse_mode='HTML')
+            elif message.content_type == 'video':
+                bot.send_video(user_id, message.video.file_id, caption=caption_full, parse_mode='HTML')
             elif message.content_type == 'document':
                 bot.send_document(user_id, message.document.file_id, caption=caption_full, parse_mode='HTML')
             count += 1
         except: pass
-    bot.send_message(ADMIN_ID, f"✅ Доставлено: {count}")
+    
+    bot.send_message(ADMIN_ID, f"✅ Рассылка завершена. Доставлено: {count}")
 
-# --- ИСПРАВЛЕННЫЕ НАСТРОЙКИ (без дублирования) ---
+# ==========================================
+# ⚙️ НАСТРОЙКИ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ==========================================
 
 def send_settings_menu(user_id):
     s = users_db.get(user_id, {"notify": True, "time": 10})
@@ -281,23 +294,19 @@ def callback_settings_actions(c):
     uid = c.message.chat.id
     if uid not in users_db: users_db[uid] = {"notify": True, "time": 10}
     
-    # Меняем значения в базе
     if c.data == "toggle": users_db[uid]['notify'] = not users_db[uid]['notify']
     elif c.data == "time": users_db[uid]['time'] = 10 if users_db[uid]['time'] == 5 else (60 if users_db[uid]['time'] == 10 else 5)
     
     save_json(FILES["users"], users_db)
 
-    # Генерируем клавиатуру заново с новыми значениями
     s = users_db[uid]
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(f"Статус: {'✅' if s['notify'] else '❌'}", callback_data="toggle"))
     markup.add(types.InlineKeyboardButton(f"Время: {s['time']} мин ⏳", callback_data="time"))
     
-    # ВОТ ЗДЕСЬ ИСПРАВЛЕНИЕ: МЫ РЕДАКТИРУЕМ, А НЕ ОТПРАВЛЯЕМ НОВОЕ
     try:
         bot.edit_message_reply_markup(chat_id=uid, message_id=c.message.message_id, reply_markup=markup)
-    except:
-        pass # Если пользователь нажал кнопку, но ничего не изменилось
+    except: pass
 
 def format_schedule():
     text = "<b>🎓 РАСПИСАНИЕ:</b>\n\n"
