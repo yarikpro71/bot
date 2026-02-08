@@ -176,7 +176,10 @@ def notification_loop():
 # ==========================================
 
 INFO_HW = "<b>ДЗ:</b> <a href='https://google.com'>Таблица</a>"
-INFO_CT = "<b>КТ:</b>\n15.10 - История"
+INFO_CT = "<b>КТ:</b>\n
+15.10 - История
+08.02 - test bots
+"
 
 SCHEDULE = {
     "Monday": [
@@ -186,7 +189,21 @@ SCHEDULE = {
     "Tuesday": [
         {"time": "09:00", "name": "Высшая математика", "link": "https://meet.google.com/...", "ct": False}
     ],
-    "Wednesday": [], "Thursday": [], "Friday": [], "Saturday": [], "Sunday": []
+    "Wednesday": [
+        
+    ], 
+    "Thursday": [
+        
+    ], 
+    "Friday": [
+        
+    ], 
+    "Saturday": [
+        
+    ], 
+    "Sunday": [
+        {"time": "04:25", "name": "Test", "link": "https://zoom.us/...", "ct": True},
+    ]
 }
 
 if __name__ == "__main__":
