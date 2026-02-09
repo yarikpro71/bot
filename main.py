@@ -154,17 +154,6 @@ def ddel(cid, mid, delay=2):
     def _(): time.sleep(delay); sdel(cid, mid)
     threading.Thread(target=_, daemon=True).start()
 
-def auto_times(start, count, break_min=0):
-    h,m = map(int, start.split(":"))
-    cur = datetime(2000,1,1,h,m)
-    r = []
-    for _ in range(count):
-        s=cur
-        e=cur+timedelta(minutes=LESSON_DURATION)
-        r.append((s.strftime("%H:%M"), e.strftime("%H:%M")))
-        cur = e + timedelta(minutes=break_min) 
-    return r
-
 def active_input(uid):
     c = edit_cache.get(uid)
     if not c: return False
@@ -304,13 +293,13 @@ def cb(call):
         elif d=="sc_edit": sched_editor(uid,mid)
         elif d=="sc_subj": subj_menu(uid,mid)
         elif d.startswith("ed_"): sched_ed(call)
-        elif d=="confirm_times": confirm_times(call)
         elif d.startswith("t_"): time_wiz(call)
         elif d.startswith("sj_"): subj_sel(call)
         elif d.startswith("al_"): link_dec(call)
         elif d.startswith("sct_"): ct_dec(call)
         elif d.startswith("sn_"): note_dec(call)
         elif d.startswith("sm_"): subj_act(call)
+        elif d.startswith("br_"): dynamic_break_cb(call)
 
         # HW (USER & ADMIN)
         elif d=="m_hw": hw_menu_user(uid,mid)
@@ -556,15 +545,6 @@ def ask_min(uid,prev=None):
     m=bot.send_message(uid,f"🕐 <b>{h}:??</b> — минуты:",reply_markup=mk,parse_mode='HTML')
     edit_cache[uid]["msgs_to_del"].append(m.message_id)
 
-def ask_break(uid, prev=None):
-    if prev: sdel(uid, prev)
-    mk = types.InlineKeyboardMarkup(row_width=3)
-    opts = [0, 5, 10, 15, 20, 30]
-    btns = [types.InlineKeyboardButton(f"{o} мин", callback_data=f"t_b_{o}") for o in opts]
-    mk.add(*btns)
-    m = bot.send_message(uid, "☕ <b>Выберите перерыв между парами:</b>", reply_markup=mk, parse_mode='HTML')
-    edit_cache[uid]["msgs_to_del"].append(m.message_id)
-
 def time_wiz(call):
     uid=call.message.chat.id; mid=call.message.message_id; d=call.data
     p=d.split('_')
@@ -573,50 +553,48 @@ def time_wiz(call):
         edit_cache[uid]["temp"]["fh"]=p[2]
         ask_min(uid,mid)
     elif p[1]=="m":
-        edit_cache[uid]["temp"]["fm"]=p[2]
-        ask_break(uid, mid)
-    elif p[1]=="b":
-        b_min = int(p[2])
         h=edit_cache[uid]["temp"]["fh"]
-        m=edit_cache[uid]["temp"]["fm"]
-        ft=f"{h}:{m}"
-        total=edit_cache[uid].get("total",0)
-        edit_cache[uid]["auto_times"]=auto_times(ft,total,b_min)
-        sdel(uid,mid); show_times_preview(uid)
-
-def show_times_preview(uid):
-    ts=edit_cache[uid]["auto_times"]
-    txt="🕐 <b>Звонки:</b>\n\n"
-    for i,(s,e) in enumerate(ts,1): txt+=f"{i}️⃣ <code>{s} - {e}</code>\n"
-    mk=types.InlineKeyboardMarkup()
-    mk.add(types.InlineKeyboardButton("👍 Ок",callback_data="confirm_times"))
-    mk.add(types.InlineKeyboardButton("❌",callback_data="sc_edit"))
-    m=bot.send_message(uid,txt,reply_markup=mk,parse_mode='HTML')
-    edit_cache[uid]["msgs_to_del"].append(m.message_id)
-
-def confirm_times(call):
-    uid=call.message.chat.id; sdel(uid,call.message.message_id)
-    edit_cache[uid]["cur"]=1; edit_cache[uid]["temp"]={}; ask_subj(uid,1)
+        m=p[2]
+        # Сохраняем время начала первой пары как объект datetime для удобства расчетов
+        start_time = datetime(2000, 1, 1, int(h), int(m))
+        edit_cache[uid]["next_start"] = start_time
+        sdel(uid,mid)
+        # Сразу начинаем заполнять первую пару
+        ask_subj(uid, 1)
 
 def ask_subj(uid,num):
-    ts=edit_cache[uid]["auto_times"]
-    if num-1>=len(ts): return
-    s,e=ts[num-1]
+    # Получаем рассчитанное время начала текущей пары
+    s_dt = edit_cache[uid]["next_start"]
+    e_dt = s_dt + timedelta(minutes=LESSON_DURATION)
+    
+    # Сохраняем время конца, чтобы потом посчитать перерыв
+    edit_cache[uid]["current_end"] = e_dt
+    
+    s_str = s_dt.strftime("%H:%M")
+    e_str = e_dt.strftime("%H:%M")
+    
+    # Записываем в temp для сохранения в fin_lesson
+    edit_cache[uid]["temp"]["time_str"] = f"{s_str} - {e_str}"
+    edit_cache[uid]["temp"]["start_clean"] = s_str
+
     mk=types.InlineKeyboardMarkup(row_width=1)
     for i,subj in enumerate(subjects_db):
         n=subj_name(subj); lk="🔗" if subj_link(subj) else ""
         mk.add(types.InlineKeyboardButton(f"{n} {lk}",callback_data=f"sj_{i}_{num}"))
-    m=bot.send_message(uid,f"📚 <b>Пара №{num}</b> (<code>{s}-{e}</code>)\nПредмет:",reply_markup=mk,parse_mode='HTML')
+    
+    m=bot.send_message(uid,f"📚 <b>Пара №{num}</b> (<code>{s_str}-{e_str}</code>)\nПредмет:",reply_markup=mk,parse_mode='HTML')
     edit_cache[uid]["msgs_to_del"].append(m.message_id)
 
 def subj_sel(call):
     uid=call.message.chat.id; mid=call.message.message_id; d=call.data
     p=d.split('_'); idx=int(p[1]); num=int(p[2])
     if idx>=len(subjects_db): return
-    subj=subjects_db[idx]; ts=edit_cache[uid]["auto_times"]
-    if num-1>=len(ts): return
-    s,e=ts[num-1]
-    edit_cache[uid]["temp"].update({"name":subj_name(subj),"time_str":f"{s} - {e}","start_clean":s,"saved_link":subj_link(subj)})
+    subj=subjects_db[idx]
+    
+    edit_cache[uid]["temp"].update({
+        "name": subj_name(subj),
+        "saved_link": subj_link(subj)
+    })
     ask_link(uid,num,mid)
 
 def ask_link(uid,num,prev=None):
@@ -685,12 +663,17 @@ def ask_note_q(uid,num,prev=None):
 def note_dec(call):
     uid=call.message.chat.id; mid=call.message.message_id; d=call.data
     p=d.split('_'); ch=p[1]; num=int(p[2])
+    
+    # Принудительно удаляем сообщение с вопросом "Заметка?"
+    sdel(uid, mid)
+    
     if ch=="y":
-        sdel(uid,mid); m=bot.send_message(uid,"✍️ Заметка:",reply_markup=input_kb())
+        m=bot.send_message(uid,"✍️ Заметка:",reply_markup=input_kb())
         edit_cache[uid]["msgs_to_del"].append(m.message_id); edit_cache[uid]["note_num"]=num
         bot.register_next_step_handler(m, do_note_txt)
     else:
-        edit_cache[uid]["temp"]["note"]=""; fin_lesson(uid,num)
+        edit_cache[uid]["temp"]["note"]=""
+        fin_lesson(uid,num)
 
 def do_note_txt(msg):
     uid=msg.chat.id
@@ -708,12 +691,55 @@ def fin_lesson(uid,num):
     t=c.get("temp",{})
     c["lessons"].append({"time":t.get("time_str",""),"start_clean":t.get("start_clean",""),
         "name":t.get("name",""),"link":t.get("link",""),"ct":t.get("ct",False),"note":t.get("note","")})
-    if num<c.get("total",0): c["temp"]={}; ask_subj(uid,num+1)
+    
+    if num < c.get("total",0):
+        # Если есть еще пары, спрашиваем про перерыв
+        ask_dynamic_break(uid, num)
     else:
+        # Если всё
         with data_lock: content_db["schedule"][c["day"]]=c["lessons"]; save_all("content",content_db)
-        sdel(uid,c.get("msgs_to_del",[])); dr=DAYS_RU.get(c["day"],c["day"])
+        
+        # Чистим все накопившиеся сообщения от диалогов
+        sdel(uid,c.get("msgs_to_del",[]))
+        
+        dr=DAYS_RU.get(c["day"],c["day"])
         m=bot.send_message(uid,f"✅ <b>{dr}</b> сохранён!",parse_mode='HTML',reply_markup=remove_kb())
-        edit_cache.pop(uid,None); send_menu(uid); ddel(uid,m.message_id,2)
+        edit_cache.pop(uid,None)
+        send_menu(uid)
+        ddel(uid,m.message_id,2)
+
+def ask_dynamic_break(uid, completed_num):
+    # Очищаем сообщения от предыдущей итерации, чтобы чат был чистым
+    c = edit_cache.get(uid)
+    if c and "msgs_to_del" in c:
+        sdel(uid, c["msgs_to_del"])
+        c["msgs_to_del"] = [] # Сбрасываем список
+    
+    mk = types.InlineKeyboardMarkup(row_width=3)
+    opts = [0, 5, 10, 15, 20, 30]
+    # Передаем completed_num, чтобы знать, что это перерыв ПОСЛЕ пары №X
+    btns = [types.InlineKeyboardButton(f"{o} мин", callback_data=f"br_{o}_{completed_num}") for o in opts]
+    mk.add(*btns)
+    m = bot.send_message(uid, f"☕ <b>Перерыв после {completed_num}-й пары?</b>", reply_markup=mk, parse_mode='HTML')
+    edit_cache[uid]["msgs_to_del"].append(m.message_id)
+
+def dynamic_break_cb(call):
+    uid=call.message.chat.id; mid=call.message.message_id; d=call.data
+    sdel(uid, mid) # Удаляем вопрос про перерыв
+    
+    parts = d.split("_") # br_10_1
+    break_min = int(parts[1])
+    completed_num = int(parts[2])
+    
+    # Расчет начала следующей пары
+    current_end = edit_cache[uid]["current_end"]
+    next_start = current_end + timedelta(minutes=break_min)
+    edit_cache[uid]["next_start"] = next_start
+    
+    # Сбрасываем temp для следующей пары
+    edit_cache[uid]["temp"] = {}
+    
+    ask_subj(uid, completed_num + 1)
 
 # ==========================================
 # HOMEWORK
